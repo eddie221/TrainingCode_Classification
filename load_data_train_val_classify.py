@@ -16,13 +16,13 @@ def load_data(args):
     
     data_transforms = prepare_transforms(args)
     
-    train_dataset = torchvision.datasets.ImageFolder("{}/train".format(args["DEFAULT"].get("DATASET_PATH")), data_transforms["train"])
+    train_dataset = torchvision.datasets.ImageFolder(args["DEFAULT"].get("TRAIN_DATASET_PATH"), data_transforms["train"])
     trainloader = DataLoader(train_dataset,
                              batch_size = args["TRAIN"].getint("BATCH_SIZE"),
                              shuffle = args["TRAIN"].getboolean("SHFFLE"),
                              num_workers = args["TRAIN"].getint("NUMBER_WORKDERS"))  
     
-    val_dataset = torchvision.datasets.ImageFolder("{}/val".format(args["DEFAULT"].get("DATASET_PATH")), data_transforms["val"])
+    val_dataset = torchvision.datasets.ImageFolder(args["DEFAULT"].get("VAL_DATASET_PATH"), data_transforms["val"])
     valloader = DataLoader(val_dataset,
                            batch_size = args["VALIDATION"].getint("BATCH_SIZE"),
                            shuffle = args["VALIDATION"].getboolean("SHFFLE"),

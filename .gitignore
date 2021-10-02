@@ -1,0 +1,8 @@
+
+.spyproject/
+
+__pycache__/
+
+logs/
+
+pkl/

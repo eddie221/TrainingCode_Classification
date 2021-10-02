@@ -13,7 +13,7 @@ from data_transform import prepare_transforms
 
 def load_data(args):
     data_transforms = prepare_transforms(args)
-    all_image_datasets = torchvision.datasets.ImageFolder(args["DEFAULT"]["DATASET_PATH"], data_transforms["train"])
+    all_image_datasets = torchvision.datasets.ImageFolder(args["DEFAULT"]["TRAIN_DATASET_PATH"], data_transforms["train"])
     
     dataloader = []
     dataset_sizes = []

@@ -8,46 +8,23 @@ Created on Wed Jun 23 14:09:48 2021
 
 import torch
 import arg_reader
-import numpy as np
 import importlib
 from load_model import load_model
 import logging
 import tqdm
 import os
+from torch.utils.tensorboard import SummaryWriter
 
-#from torch.utils.tensorboard import SummaryWriter
-#writer = SummaryWriter('../tensorflow/logs/cub_{}'.format(INDEX), comment = "224_64")
-
+# =============================================================================
+# Get optimizer learning rate
+# =============================================================================
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
-def create_nn_model():
-    pass
-
-def create_opt_loss(model):
-    pass
-
-def load_param(model):
-    # load resnet
-    params = torch.load("../pretrain/resnet50.pth")
-    load = []
-    not_load = []
-    for name, param in params.items():
-        if name in model.state_dict():
-            try:
-                model.state_dict()[name].copy_(param)
-                load.append(name)
-            except:
-                not_load.append(name)
-        else:
-            not_load.append(name)
-    print("Load {} layers".format(len(load)))
-    print("Not load {} layers".format(len(not_load)))
-            
-    return model
-
-# run one iteration
+# =============================================================================
+# Run one iteration
+# =============================================================================
 def one_step(args, model, data, label, loss_func, optimizers, phase):
     if args.getint("DEVICE") != -1:
         b_data = data.cuda()
@@ -58,21 +35,31 @@ def one_step(args, model, data, label, loss_func, optimizers, phase):
         
     for optimizer in optimizers:
         optimizer.zero_grad() 
-        
+    
+    # Model forward
     output_1 = model(b_data)
     
+    # Get prediction 
     _, predicted = torch.max(output_1.data, 1)
     #_, predicted5 = torch.topk(output_1.data, 5, dim = 1)
     
     cls_loss = loss_func[0](output_1, b_label)
     loss = cls_loss
+    
+    if phase == 'train':
+        loss.backward()
+        for optimizer in optimizers:
+            optimizer.step()
+    
     return loss.item(), predicted.detach().cpu()#, predicted5.detach().cpu()
 
-# load data, load model (pretrain if needed), define loss function, define optimizer, 
+# =============================================================================
+# Load data, load model (pretrain if needed), define loss function, define optimizer, 
 # define learning rate scheduler (if needed), training and validation
+# =============================================================================
 def runs(args):
     
-    # load dataset ------------------------------------------------------------
+    # Load dataset ------------------------------------------------------------
     if "DATALOADER" in args["DEFAULT"]:
         if "KFOLD" in args["DEFAULT"]:
             dataloader = importlib.import_module(args["DEFAULT"].get("DATALOADER"))
@@ -83,27 +70,32 @@ def runs(args):
         all_image_datasets = None
     # -------------------------------------------------------------------------
     
+    # 
+    # Define tensorboard for recording ----------------------------------------
+    writer = SummaryWriter('./logs/{}'.format(args["DEFAULT"].get("INDEX")))
+    # -------------------------------------------------------------------------
+    
     for index, image_data in enumerate(dataset):
 
-        # load model (load pretrain if needed) ------------------------------------
+        # Load model (load pretrain if needed) ------------------------------------
         model = load_model(args["DEFAULT"])
         # -------------------------------------------------------------------------
         
-        # define loss -------------------------------------------------------------
+        # Define loss -------------------------------------------------------------
         loss_funcs = []
         if args["DEFAULT"].get("LOSS") == "CE":
             loss_funcs.append(torch.nn.CrossEntropyLoss())
         assert len(loss_funcs) != 0, "Miss define loss"
         # -------------------------------------------------------------------------
         
-        # define optimizer --------------------------------------------------------
+        # Define optimizer --------------------------------------------------------
         optimizers = []
         if args["DEFAULT"].get("OPTIMIZER") == "ADAM":
             optimizers.append(torch.optim.Adam(model.parameters(), lr = args["DEFAULT"].getfloat("LR"), weight_decay = args["DEFAULT"].getfloat("WD")))
         assert len(optimizers) != 0, "Miss define optimizer"
         # -------------------------------------------------------------------------
         
-        # define learning rate scheduler ------------------------------------------
+        # Define learning rate scheduler ------------------------------------------
         lr_schedulers = []
         if "LR_SCHEUDLER" in args["DEFAULT"]:
             lr_schedulers.append(torch.optim.lr_scheduler.MultiStepLR(optimizers[0], milestones=[75, 150, 225, 300, 375], gamma=0.1))
@@ -138,16 +130,21 @@ def runs(args):
                     model.train(True)
                 else:
                     model.train(False)
-                step = 0
-                for data, label in tqdm.tqdm(image_data[phase]):
+
+                for step, (data, label) in enumerate(tqdm.tqdm(image_data[phase])):
                     #loss, predicted, predicted5 = one_step(args["DEFAULT"], model, data, label, loss_funcs, optimizers, phase)
                     loss, predicted = one_step(args["DEFAULT"], model, data, label, loss_funcs, optimizers, phase)
                     
                     loss_t.update(loss, data.size(0))
                     correct_t.update((predicted == label).sum().item() / label.shape[0], label.shape[0])
                     #correct_t5.update((predicted5 == label.unsqueeze(1)).sum().item() / label.shape[0], label.shape[0])
-                    step += 1
-                # save model --------------------------------------------------
+                    
+                # Recording loss and accuracy ---------------------------------
+                writer.add_scalar('Loss/{}'.format(phase), loss_t.avg, epoch)
+                writer.add_scalar('Accuracy/{}'.format(phase), correct_t.avg, epoch)
+                # -------------------------------------------------------------
+                    
+                # Save model --------------------------------------------------
 # =============================================================================
 #                 # top5 
 #                 if max_acc5[phase].avg < correct_t5.avg:
@@ -173,6 +170,7 @@ def runs(args):
                         print('save')
                         torch.save(save_data, './pkl/{}/fold_{}_best_{}.pkl'.format(args["DEFAULT"].get("INDEX"), index, args["DEFAULT"].get("INDEX")))
                 # -------------------------------------------------------------
+                
                 logging.info("{} set loss : {:.6f}".format(phase, loss_t.avg))        
                 logging.info("{} set top-1 acc : {:.6f}%".format(phase, correct_t.avg * 100.))  
                 logging.info("{} set top-5 acc : {:.6f}%".format(phase, correct_t5.avg * 100.))  
@@ -191,6 +189,8 @@ def runs(args):
             for lr_scheduler in lr_schedulers:
                 lr_scheduler.step()
         # ---------------------------------------------------------------------
+    
+    # Show the best result ----------------------------------------------------
     acc = 0
     acc5 = 0
     loss = 0
@@ -200,8 +200,10 @@ def runs(args):
         acc5 += ACCMeters5[idx - 1].avg
         loss += LOSSMeters[idx - 1].avg
     print("Avg. ACC : {:.6f} Avg. ACC(5) : {:.6f} Avg. Loss : {:.6f}".format(acc / args["DEFAULT"].getint("KFOLD"), acc5 / args["DEFAULT"].getint("KFOLD"),loss / args["DEFAULT"].getint("KFOLD")))
-    pass    
 
+# =============================================================================
+# Templet for recording values
+# =============================================================================
 class AverageMeter():
     """Computes and stores the average and current value"""
 
@@ -228,6 +230,7 @@ if __name__ == '__main__':
         os.mkdir("./pkl")
     if not os.path.exists("./pkl/{}".format(args["DEFAULT"].get("INDEX"))):
         os.mkdir("./pkl/{}".format(args["DEFAULT"].get("INDEX")))
+        
     logging.basicConfig(filename = './pkl/{}/logging.txt'.format(args["DEFAULT"].get("INDEX")), level=logging.DEBUG)
     logging.info('Index : {}'.format(args["DEFAULT"].get("INDEX")))
     logging.info("dataset : {}".format(args["DEFAULT"].get("DATASET_NAME") if "DATASET_NAME" in args["DEFAULT"] else args["DEFAULT"]["DATASET_PATH"].split('/')[-1] ))
