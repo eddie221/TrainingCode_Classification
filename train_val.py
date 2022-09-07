@@ -14,6 +14,7 @@ import logging
 import tqdm
 import os
 from torch.utils.tensorboard import SummaryWriter
+from config import cfg
 
 # =============================================================================
 # Get optimizer learning rate
@@ -25,8 +26,8 @@ def get_lr(optimizer):
 # =============================================================================
 # Run one iteration
 # =============================================================================
-def one_step(args, model, data, label, loss_func, optimizers, phase):
-    if args.getint("DEVICE") != -1:
+def one_step(model, data, label, loss_func, optimizers, phase, args):
+    if args.DEVICE != -1:
         b_data = data.cuda()
         b_label = label.cuda()
     else:
@@ -37,13 +38,15 @@ def one_step(args, model, data, label, loss_func, optimizers, phase):
         optimizer.zero_grad() 
     
     # Model forward
-    output_1 = model(b_data)
-    
+    output = model(b_data)
+
     # Get prediction 
-    _, predicted = torch.max(output_1.data, 1)
+    _, predicted = torch.max(output.data, 1)
     #_, predicted5 = torch.topk(output_1.data, 5, dim = 1)
     
-    cls_loss = loss_func[0](output_1, b_label)
+    # calculate loss
+    cls_loss = loss_func[0](output, b_label)
+
     loss = cls_loss
     
     if phase == 'train':
@@ -58,54 +61,51 @@ def one_step(args, model, data, label, loss_func, optimizers, phase):
 # define learning rate scheduler (if needed), training and validation
 # =============================================================================
 def runs(args):
-    
     # Load dataset ------------------------------------------------------------
-    if "DATALOADER" in args["DEFAULT"]:
-        if "KFOLD" in args["DEFAULT"]:
-            dataloader = importlib.import_module(args["DEFAULT"].get("DATALOADER"))
-            dataset, dataset_sizes, all_image_datasets = dataloader.load_data(args)
-    else:
-        dataloader = importlib.import_module("load_data_train_val_classify")
-        dataset, dataset_sizes = dataloader.load_data(args)
-        all_image_datasets = None
+    dataloader = importlib.import_module(args.DATALOADER)
+    dataset, dataset_sizes, all_image_datasets = dataloader.load_data(args)
+    push_dataset = dataloader.push_load_data(args)
     # -------------------------------------------------------------------------
     
     # 
     # Define tensorboard for recording ----------------------------------------
-    writer = SummaryWriter('./logs/{}'.format(args["DEFAULT"].get("INDEX")))
+    writer = SummaryWriter('./logs/{}'.format(args.INDEX))
     # -------------------------------------------------------------------------
     
     for index, image_data in enumerate(dataset):
 
         # Load model (load pretrain if needed) ------------------------------------
-        model = load_model(args["DEFAULT"])
+        model = load_model(args)
         # -------------------------------------------------------------------------
         
         # Define loss -------------------------------------------------------------
         loss_funcs = []
-        if args["DEFAULT"].get("LOSS") == "CE":
+        if args.LOSS == "CE":
             loss_funcs.append(torch.nn.CrossEntropyLoss())
         assert len(loss_funcs) != 0, "Miss define loss"
         # -------------------------------------------------------------------------
         
         # Define optimizer --------------------------------------------------------
-        optimizers = []
-        if args["DEFAULT"].get("OPTIMIZER") == "ADAM":
-            optimizers.append(torch.optim.Adam(model.parameters(), lr = args["DEFAULT"].getfloat("LR"), weight_decay = args["DEFAULT"].getfloat("WD")))
-        assert len(optimizers) != 0, "Miss define optimizer"
+
+        train_optimizers = []
+        if args.OPTIMIZER == "ADAM":
+            train_optimizers.append(torch.optim.Adam(model.parameters(), lr = args.LR, weight_decay = args.WD))
+        
+        assert len(train_optimizers) != 0, "Miss define optimizer"
         # -------------------------------------------------------------------------
         
         # Define learning rate scheduler ------------------------------------------
         lr_schedulers = []
-        if "LR_SCHEUDLER" in args["DEFAULT"]:
-            lr_schedulers.append(torch.optim.lr_scheduler.MultiStepLR(optimizers[0], milestones=[75, 150, 225, 300, 375], gamma=0.1))
+        if "LR_SCHEUDLER" in args:
+            #lr_schedulers.append(torch.optim.lr_scheduler.MultiStepLR(optimizers[0], milestones=[75, 150, 225, 300, 375], gamma=0.1))
+            lr_schedulers.append(torch.optim.lr_scheduler.StepLR(train_optimizers[0], step_size = args.joint_lr_step_size, gamma = 0.1))
         # -------------------------------------------------------------------------
         
         # Define Meters -------------------------------------------------------
         ACCMeters = []
         ACCMeters5 = []
         LOSSMeters = []
-        for i in range(args["DEFAULT"].getint("KFOLD")):
+        for i in range(args.KFOLD):
             ACCMeters.append(AverageMeter())
             ACCMeters5.append(AverageMeter())
             LOSSMeters.append(AverageMeter())
@@ -117,10 +117,10 @@ def runs(args):
         # ---------------------------------------------------------------------
         
         # Train ---------------------------------------------------------------
-        for epoch in range(1, args["DEFAULT"].getint("EPOCH") + 1):
-            print('Fold {}/{} Epoch {}/{}'.format(index + 1, args["DEFAULT"].getint("KFOLD"), epoch, args["DEFAULT"].getint("EPOCH")))
+        for epoch in range(1, args.EPOCH + 1):
+            print('Fold {}/{} Epoch {}/{}'.format(index + 1, args.EPOCH, epoch, args.EPOCH))
             logging.info("-" * 15)
-            logging.info('Fold {}/{} Epoch {}/{}'.format(index + 1, args["DEFAULT"].getint("KFOLD"), epoch, args["DEFAULT"].getint("EPOCH")))
+            logging.info('Fold {}/{} Epoch {}/{}'.format(index + 1, args.KFOLD, epoch, args.EPOCH))
             print('-' * 10)
             for phase in ["train", "val"]:
                 correct_t = AverageMeter()
@@ -128,12 +128,13 @@ def runs(args):
                 loss_t = AverageMeter()
                 if phase == 'train':
                     model.train(True)
+                    optimizers = train_optimizers
                 else:
                     model.train(False)
 
                 for step, (data, label) in enumerate(tqdm.tqdm(image_data[phase])):
                     #loss, predicted, predicted5 = one_step(args["DEFAULT"], model, data, label, loss_funcs, optimizers, phase)
-                    loss, predicted = one_step(args["DEFAULT"], model, data, label, loss_funcs, optimizers, phase)
+                    loss, predicted = one_step(model, data, label, loss_funcs, optimizers, phase, args)
                     
                     loss_t.update(loss, data.size(0))
                     correct_t.update((predicted == label).sum().item() / label.shape[0], label.shape[0])
@@ -155,7 +156,7 @@ def runs(args):
 #                         ACCMeters5[index] = correct_t
 #                         save_data = model.state_dict()
 #                         print('save')
-#                         torch.save(save_data, './pkl/{}/fold_{}_best5_{}.pkl'.format(args["DEFAULT"].get("INDEX"), index, args["DEFAULT"].get("INDEX")))
+#                         torch.save(save_data, './pkl/{}/fold_{}_best5_{}.pkl'.format(args.INDEX, index, args.INDEX))
 # =============================================================================
                         
                 # top1
@@ -168,15 +169,14 @@ def runs(args):
                         LOSSMeters[index] = loss_t
                         save_data = model.state_dict()
                         print('save')
-                        torch.save(save_data, './pkl/{}/fold_{}_best_{}.pkl'.format(args["DEFAULT"].get("INDEX"), index, args["DEFAULT"].get("INDEX")))
+                        torch.save(save_data, './pkl/{}/fold_{}_best_{}.pkl'.format(args.INDEX, index, args.INDEX))
                 # -------------------------------------------------------------
-                
                 logging.info("{} set loss : {:.6f}".format(phase, loss_t.avg))        
                 logging.info("{} set top-1 acc : {:.6f}%".format(phase, correct_t.avg * 100.))  
                 logging.info("{} set top-5 acc : {:.6f}%".format(phase, correct_t5.avg * 100.))  
-                print('Index : {}'.format(args["DEFAULT"].get("INDEX")))
-                print("dataset : {}".format(args["DEFAULT"].get("DATASET_NAME") if "DATASET_NAME" in args["DEFAULT"] else args["DEFAULT"]["DATASET_PATH"].split('/')[-1]))
-                print("Model name : {}".format(args["DEFAULT"].get("Model")))
+                print('Index : {}'.format(args.INDEX))
+                print("dataset : {}".format(args.DATASET_NAME))
+                print("Model name : {}".format(args.MODEL))
                 print("{} set loss : {:.6f}".format(phase, loss_t.avg))
                 print("{} set acc : {:.6f}%".format(phase, correct_t.avg * 100.))
                 print("{} last update : {:.6f}%".format(phase, (max_acc[phase].avg - last_acc[phase].avg) * 100.))
@@ -199,7 +199,7 @@ def runs(args):
         acc += ACCMeters[idx - 1].avg
         acc5 += ACCMeters5[idx - 1].avg
         loss += LOSSMeters[idx - 1].avg
-    print("Avg. ACC : {:.6f} Avg. ACC(5) : {:.6f} Avg. Loss : {:.6f}".format(acc / args["DEFAULT"].getint("KFOLD"), acc5 / args["DEFAULT"].getint("KFOLD"),loss / args["DEFAULT"].getint("KFOLD")))
+    print("Avg. ACC : {:.6f} Avg. ACC(5) : {:.6f} Avg. Loss : {:.6f}".format(acc / args.KFOLD, acc5 / args.KFOLD,loss / args.KFOLD))
 
 # =============================================================================
 # Templet for recording values
@@ -223,17 +223,16 @@ class AverageMeter():
         self.avg = self.sum / self.count
 
 if __name__ == '__main__':
-    args = arg_reader.read_args()
-    if args.configfile is not None:
-        args = arg_reader.read_cfg(args.configfile)
+    args = arg_reader.read_args(**cfg)
     if not os.path.exists("./pkl"):
         os.mkdir("./pkl")
-    if not os.path.exists("./pkl/{}".format(args["DEFAULT"].get("INDEX"))):
-        os.mkdir("./pkl/{}".format(args["DEFAULT"].get("INDEX")))
-        
-    logging.basicConfig(filename = './pkl/{}/logging.txt'.format(args["DEFAULT"].get("INDEX")), level=logging.DEBUG)
-    logging.info('Index : {}'.format(args["DEFAULT"].get("INDEX")))
-    logging.info("dataset : {}".format(args["DEFAULT"].get("DATASET_NAME") if "DATASET_NAME" in args["DEFAULT"] else args["DEFAULT"]["DATASET_PATH"].split('/')[-1] ))
+    print("Args : ", args)
+    if not os.path.exists("./pkl/{}".format(args.INDEX)):
+        os.mkdir("./pkl/{}".format(args.INDEX))
+    
+    logging.basicConfig(filename = './pkl/{}/logging.txt'.format(args.INDEX), level=logging.DEBUG)
+    logging.info('Index : {}'.format(args.INDEX))
+    logging.info("dataset : {}".format(args.DATASET_NAME))
     
     runs(args)
         

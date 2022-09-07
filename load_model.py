@@ -9,24 +9,27 @@ Created on Wed Jun 23 19:46:39 2021
 import torchvision.models.resnet as resnet
 import torch.nn as nn
 import torch
+import importlib
 
 # =============================================================================
 # Return model
 # =============================================================================
 def load_model(args):
-    model = resnet.resnet50(num_classes = args.getint("CATEGORY"))
+    #model = importlib.import_module(args.MODEL)
+    #model = model.load_model(args.CATEGORY)
+    model = resnet.resnet50(num_classes = args.CATEGORY)
     if "PARAMETER_PATH" in args:
-        model = load_parameter(args, model)
-    model = nn.DataParallel(model, device_ids = list(map(int, args.get("DEVICE").split(","))))
+        model = load_parameter(model, args)
+    model = nn.DataParallel(model, device_ids = args.DEVICE)
     return model
 
 
 # =============================================================================
 # Load pretrain model parameter
 # =============================================================================
-def load_parameter(args, model):
+def load_parameter(model, args):
     import torch
-    params = torch.load(args.get("PARAMETER_PATH"))
+    params = torch.load(args.PARAMETER_PATH)
     load = []
     not_load = []
     for name, param in params.items():
