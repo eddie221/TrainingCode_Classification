@@ -213,47 +213,47 @@ class Compose(object):
         return s
         
 
-    def __call__(self, *args):
+    def __call__(self, **args):
         for t in self.transforms:
-            args = t(*args)
+            args = t(**args)
         return args
     
-def prepare_transforms(args):
+def prepare_transforms(**args):
     train_transforms = []
     validation_transforms = []
     # Resize image
-    if "IMAGE_SIZE" in args["TRAIN"]:
-        train_transforms.append(Resize(args["TRAIN"]["IMAGE_SIZE"]))
-    if "IMAGE_SIZE" in args["VALIDATION"]:
-        validation_transforms.append(Resize(args["VALIDATION"]["IMAGE_SIZE"]))
+    if "IMAGE_SIZE" in args:
+        train_transforms.append(Resize(args.TRAIN_IMAGE_SIZE))
+    if "IMAGE_SIZE" in args.VALIDATION:
+        validation_transforms.append(Resize(args.VALIDATION["IMAGE_SIZE"]))
     
     # RandomCrop image
-    if "RANDOM_CROP_SIZE" in args["TRAIN"]:
-        train_transforms.append(RandomCrop(args["TRAIN"].getint("RANDOM_CROP_SIZE")))
-    if "RANDOM_CROP_SIZE" in args["VALIDATION"]:
-        validation_transforms.append(RandomCrop(args["VALIDATION"].getint("RANDOM_CROP_SIZE")))
+    if "RANDOM_CROP_SIZE" in args:
+        train_transforms.append(RandomCrop(args.TRAIN_RANDOM_CROP_SIZE))
+    if "RANDOM_CROP_SIZE" in args.VALIDATION:
+        validation_transforms.append(RandomCrop(args.VALIDATION.getint("RANDOM_CROP_SIZE")))
         
     # Random flip
-    if "RANDOM_FILP" in args["TRAIN"] and args["TRAIN"]["RANDOM_FILP"]:
+    if "RANDOM_FILP" in args and args.TRAIN_RANDOM_FILP:
         train_transforms.append(RandomFlip())
-    if "RANDOM_FILP" in args["VALIDATION"] and args["VALIDATION"]["RANDOM_FILP"]:
+    if "RANDOM_FILP" in args.VALIDATION and args.VALIDATION["RANDOM_FILP"]:
         validation_transforms.append(RandomFlip())
         
 # =============================================================================
 #     # Change type to Tensor
-#     train_transforms.append(RandomFlip(args["TRAIN"]["RANDOM_FILP"]))
-#     validation_transforms.append(RandomFlip(args["VALIDATION"]["RANDOM_FILP"]))
+#     train_transforms.append(RandomFlip(args.TRAIN_RANDOM_FILP))
+#     validation_transforms.append(RandomFlip(args.VALIDATION["RANDOM_FILP"]))
 # =============================================================================
 
-    if "Normalize" in args["TRAIN"] and args["TRAIN"]["Normalize"]:
-        assert "MEAN" in args["TRAIN"], "Missing nomalize parameter \"MEAN\" in training."
-        assert "STD" in args["TRAIN"], "Missing nomalize parameter \"STD\" in training."   
-        train_transforms.append(Normalize(args["TRAIN"]["MEAN"], args["TRAIN"]["STD"]))
-    if "Normalize" in args["VALIDATION"] and args["VALIDATION"]["Normalize"]:
-        assert "MEAN" in args["VALIDATION"], "Missing nomalize parameter \"MEAN\" in validation."
-        assert "STD" in args["VALIDATION"], "Missing nomalize parameter \"STD\" in validation." 
+    if args.TRAIN_Normalize:
+        assert "MEAN" in args, "Missing nomalize parameter \"MEAN\" in training."
+        assert "STD" in args, "Missing nomalize parameter \"STD\" in training."   
+        train_transforms.append(Normalize(args.TRAIN_MEAN, args.TRAIN_STD))
         
-        validation_transforms.append(Normalize(args["VALIDATION"]["MEAN"], args["VALIDATION"]["STD"]))
+    if args.VALIDATION["Normalize"]:
+        assert "MEAN" in args.VALIDATION, "Missing nomalize parameter \"MEAN\" in validation."
+        assert "STD" in args.VALIDATION, "Missing nomalize parameter \"STD\" in validation." 
+        validation_transforms.append(Normalize(args.VALIDATION["MEAN"], args.VALIDATION["STD"]))
 
     data_transforms = {
         "train": Compose(train_transforms),

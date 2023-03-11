@@ -13,21 +13,27 @@ def prepare_transforms(args):
     train_transforms = []
     validation_transforms = []
     # Resize image
-    if "TRAIN_IMAGE_SIZE" in args:
+    if "TRAIN_IMAGE_SIZE" in args and args["TRAIN_IMAGE_SIZE"]:
         train_transforms.append(transforms.Resize(args.TRAIN_IMAGE_SIZE))
-    if "VAL_IMAGE_SIZE" in args:
+    if "VAL_IMAGE_SIZE" in args and args["VAL_IMAGE_SIZE"]:
         validation_transforms.append(transforms.Resize(args.VAL_IMAGE_SIZE))
     
     # RandomCrop image
-    if "TRAIN_RANDOM_CROP_SIZE" in args:
+    if "TRAIN_RANDOM_CROP_SIZE" in args and args["TRAIN_RANDOM_CROP_SIZE"]:
         train_transforms.append(transforms.RandomCrop(args.TRAIN_RANDOM_CROP_SIZE))
-    if "VAL_RANDOM_CROP_SIZE" in args:
+    if "VAL_RANDOM_CROP_SIZE" in args and args["VAL_RANDOM_CROP_SIZE"]:
         validation_transforms.append(transforms.RandomCrop(args.VAL_RANDOM_CROP_SIZE))
         
+    # CenterCrop image
+    if "TRAIN_CENTER_CROP_SIZE" in args and args["TRAIN_CENTER_CROP_SIZE"]:
+        train_transforms.append(transforms.CenterCrop(args.TRAIN_CENTER_CROP_SIZE))
+    if "VAL_CENTER_CROP_SIZE" in args and args["VAL_CENTER_CROP_SIZE"]:
+        validation_transforms.append(transforms.CenterCrop(args.VAL_CENTER_CROP_SIZE))
+
     # Random flip
-    if "TRAIN_RANDOM_FILP" in args:
+    if "TRAIN_RANDOM_FILP" in args and args["TRAIN_RANDOM_FILP"]:
         train_transforms.append(transforms.RandomHorizontalFlip())
-    if "VAL_RANDOM_FILP" in args:
+    if "VAL_RANDOM_FILP" in args and args["VAL_RANDOM_FILP"]:
         validation_transforms.append(transforms.RandomHorizontalFlip())
         
 # =============================================================================
@@ -40,8 +46,10 @@ def prepare_transforms(args):
     validation_transforms.append(transforms.ToTensor())
 
     # Normalize
-    train_transforms.append(transforms.Normalize(args.TRAIN_MEAN, args.TRAIN_STD,))
-    validation_transforms.append(transforms.Normalize(args.VAL_MEAN, args.VAL_STD,))
+    if "TRAIN_NORM" in args and args["TRAIN_NORM"]:
+        train_transforms.append(transforms.Normalize(args.TRAIN_MEAN, args.TRAIN_STD,))
+    if "VAL_NORM" in args and args["VAL_NORM"]:
+        validation_transforms.append(transforms.Normalize(args.VAL_MEAN, args.VAL_STD,))
 
 # =============================================================================
 #     if "Normalize" in args["TRAIN"] and args["TRAIN"]["Normalize"]:
