@@ -47,6 +47,10 @@ def load_model(args):
         info_log("Load pretrained weight !", rank = args.local_rank, type = args.INFO_SHOW)
         model_module.load_pretrained(args.PRETRAINED_PATH, model)
 
+    if args.RESUME:
+        print("load resume weight : {}".format(args.WEIGHT_PATH))
+        model = model_module.load_weight(args.WEIGHT_PATH, model)
+
     return model
 
 # =============================================================================

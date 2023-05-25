@@ -17,10 +17,11 @@ from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 from config import cfg
 import sys
-from utils.general import info_log, set_logging, main_process_first
+from utils.general import info_log
 from utils.env_check import check_device
 from easydict import EasyDict as edict
 import shutil
+import time
 
 # =============================================================================
 # Get optimizer learning rate
@@ -103,6 +104,14 @@ def runs(args):
     # -------------------------------------------------------------------------
     
     for index, image_data in enumerate(dataset):
+        # resume training process ------------------------------------------------
+        start_epoch = 1
+        if args.RESUME:
+            resume_data = torch.load(args.WEIGHT_PATH)
+            args.m = resume_data['m']
+            args.m_is_concept_num = resume_data['m_is_concept_num']
+            start_epoch = resume_data["Epoch"] + 1
+        # ------------------------------------------------------------------------
 
         # Load model (load pretrain if needed) ------------------------------------
         model = load_model(args)
@@ -119,15 +128,20 @@ def runs(args):
         train_optimizers = []
         if args.OPTIMIZER == "ADAM":
             train_optimizers.append(torch.optim.Adam(model.parameters(), lr = args.LR, weight_decay = args.WD))
-        
+
+        if args.RESUME:
+            for i in range(len(resume_data["Optimizer"])):
+                train_optimizers[i].load_state_dict(resume_data["Optimizer"][i])
         assert len(train_optimizers) != 0, "Miss define optimizer"
         # -------------------------------------------------------------------------
         
         # Define learning rate scheduler ------------------------------------------
         lr_schedulers = []
         if "LR_SCHEUDLER" in args:
-            #lr_schedulers.append(torch.optim.lr_scheduler.MultiStepLR(optimizers[0], milestones=[75, 150, 225, 300, 375], gamma=0.1))
             lr_schedulers.append(torch.optim.lr_scheduler.StepLR(train_optimizers[0], step_size = args.joint_lr_step_size, gamma = 0.1))
+        if args.RESUME:
+            for i in range(len(resume_data["LR_scheduler"])):
+                lr_schedulers[i].load_state_dict(resume_data["LR_scheduler"][i])
         # -------------------------------------------------------------------------
         
         # Define Meters -------------------------------------------------------
@@ -146,10 +160,9 @@ def runs(args):
         # ---------------------------------------------------------------------
         
         # Start training process ---------------------------------------------------------------
-        for epoch in range(1, args.EPOCH + 1):
-            
-            logging.info('Fold {}/{} Epoch {}/{}'.format(index + 1, args.KFOLD, epoch, args.EPOCH))
-            logging.info("-" * 15)
+        for epoch in range(start_epoch, args.EPOCH + 1):
+            info_log('Fold {}/{} Epoch {}/{}'.format(index + 1, args.KFOLD, epoch, args.EPOCH), type = args.INFO_SHOW)
+            info_log("-" * 15, type = args.INFO_SHOW)
 
             for phase in ["train", "val"]:
                 correct_t = AverageMeter()
@@ -161,7 +174,11 @@ def runs(args):
                     optimizers = train_optimizers
                 else:
                     model.train(False)
-
+                
+                if args.global_rank != -1:
+                    image_data["train"].sampler.set_epoch(epoch)
+                    image_data["val"].sampler.set_epoch(epoch)
+                    
                 data_bar = enumerate(image_data[phase])
                 if args.global_rank in [-1, 0]:
                     data_bar = tqdm.tqdm(data_bar, total = len(image_data[phase]))
@@ -182,10 +199,8 @@ def runs(args):
                     loss_t.update(loss, data.size(0))
                     correct_t.update((predicted == label).sum().item() / label.shape[0], label.shape[0])
                     #correct_t5.update((predicted5 == label.unsqueeze(1)).sum().item() / label.shape[0], label.shape[0])
-                    if step == 5:
-                        break
-                    
-                
+                    for lr_scheduler in lr_schedulers:
+                        lr_scheduler.step()
                 if args.global_rank in [-1, 0]:
                     # Recording loss and accuracy ---------------------------------
                     writer.add_scalar('Loss/{}'.format(phase), loss_t.avg, epoch)
@@ -208,17 +223,44 @@ def runs(args):
                     if max_acc[phase].avg < correct_t.avg:
                         last_acc[phase] = max_acc[phase]
                         max_acc[phase] = correct_t
+
                         optimizers_state_dict = []
-                        for tmp in optimizers:
+                        for tmp in train_optimizers:
                             optimizers_state_dict.append(tmp.state_dict())
+                        lr_state_dict = []
+                        for tmp in lr_schedulers:
+                            lr_state_dict.append(tmp.state_dict())
                         if phase == 'val':
                             ACCMeters[index] = correct_t
                             LOSSMeters[index] = loss_t
                             save_data = {"Model" : model.state_dict(),
                                         "Epoch" : args.EPOCH,
                                         "Optimizer" : optimizers_state_dict,
-                                        "Best ACC" : max_acc[phase].avg}
+                                        "LR_scheduler" : lr_state_dict,
+                                        "Best ACC" : max_acc[phase].avg,
+                                        "Time" : args.start,
+                                        "Loss" : loss_t,
+                                        "ACC" : max_acc}
                             torch.save(save_data, './pkl/{}/{}_{}/fold_{}_best_{}.pkl'.format(args.INDEX, args.MODEL.lower(), args.BASIC_MODEL.lower(), index, args.INDEX))
+                    
+                    optimizers_state_dict = []
+                    for tmp in train_optimizers:
+                        optimizers_state_dict.append(tmp.state_dict())
+                    lr_state_dict = []
+                    for tmp in lr_schedulers:
+                        lr_state_dict.append(tmp.state_dict())
+                    if phase == 'val':
+                        ACCMeters[index] = correct_t
+                        LOSSMeters[index] = loss_t
+                        save_data = {"Model" : model.state_dict(),
+                                    "Epoch" : args.EPOCH,
+                                    "Optimizer" : optimizers_state_dict,
+                                    "LR_scheduler" : lr_state_dict,
+                                    "Best ACC" : max_acc[phase].avg,
+                                    "Time" : args.start,
+                                    "Loss" : loss_t,
+                                    "ACC" : max_acc}
+                        torch.save(save_data, './pkl/{}/{}_{}/fold_{}_last_{}.pkl'.format(args.INDEX, args.MODEL.lower(), args.BASIC_MODEL.lower(), index, args.INDEX))
                     # -------------------------------------------------------------
                     info_log('Index : {}'.format(args.INDEX), type = args.INFO_SHOW)
                     info_log("dataset : {}".format(args.DATASET_NAME), type = args.INFO_SHOW)
@@ -232,8 +274,8 @@ def runs(args):
                     # print("{} set acc(5) : {:.6f}%".format(phase, correct_t5.avg * 100.))
                     # print("{} last update(5) : {:.6f}%".format(phase, (max_acc5[phase].avg - last_acc5[phase].avg) * 100.))
                     # print("{} set max acc(5) : {:.6f}%".format(phase, max_acc5[phase].avg * 100.))
-            for lr_scheduler in lr_schedulers:
-                lr_scheduler.step()
+            # for lr_scheduler in lr_schedulers:
+            #     lr_scheduler.step()
         # ---------------------------------------------------------------------
     
     # Show the best result ----------------------------------------------------
@@ -291,8 +333,6 @@ if __name__ == '__main__':
         args.VAL_BATCH_SIZE = args.VAL_TOTAL_BATCH_SIZE // args.world_size
 
     if args.global_rank in [-1, 0]:
-        info_log("Args : {}".format(args), type = args.INFO_SHOW)
-
         if not os.path.exists("./pkl"):
             os.mkdir("./pkl")
         if not os.path.exists("./pkl/{}/".format(args.INDEX)):
@@ -300,7 +340,7 @@ if __name__ == '__main__':
         
         if not os.path.exists("./pkl/{}/{}_{}".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower())):
             os.mkdir("./pkl/{}/{}_{}".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower()))
-        else:
+        elif not args.RESUME:
             response = input("The experiment already exist ({}/{}_{}). Are you sure you want replace it? (y/n)".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower())).lower()
             while response != 'y' and response != 'n':
                 response = input("The experiment already exist ({}/{}_{}). Are you sure you want replace it? (y/n)".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower())).lower()
@@ -308,23 +348,29 @@ if __name__ == '__main__':
                 import sys
                 sys.exit()
         
-        # save file to specific direction -----------------------------------------
-        dst = "./pkl/{}/{}_{}".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower())
-        shutil.copy(src = os.path.join(os.getcwd(), __file__), dst = dst)
-        shutil.copy(src = os.path.join(os.getcwd(), "config.py"), dst = dst)
-        if "resnet" in args.MODEL.lower():
-            shutil.copy(src = os.path.join(os.getcwd(), "ResNet.py"), dst = dst)
-        else:
-            shutil.copy(src = os.path.join(os.getcwd(), "{}.py".format(args.MODEL)), dst = dst)
-            shutil.copy(src = os.path.join(os.getcwd(), "ResNet.py"), dst = dst)
-            shutil.copy(src = os.path.join(os.getcwd(), "loss.py"), dst = dst)
-        shutil.copy(src = os.path.join(os.getcwd(), "load_model.py"), dst = dst)
-        # -------------------------------------------------------------------------
-        
-        logging.basicConfig(filename = './pkl/{}/{}_{}/logging.txt'.format(args.INDEX, args.MODEL.lower(), args.BASIC_MODEL.lower()), filemode='w', level=logging.INFO)
-        logging.info('Index : {}'.format(args.INDEX))
-        logging.info("dataset : {}".format(args.DATASET_NAME))
+            with open("./pkl/{}/{}_{}/logging.txt".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower()), "w") as f:
+                print(args, file = f)
+
+            info_log("Args : {}".format(args), type = args.INFO_SHOW)
+
+            # save file to specific direction -----------------------------------------
+            dst = "./pkl/{}/{}_{}".format(args.INDEX, args.MODEL.lower(), cfg.BASIC_MODEL.lower())
+            shutil.copy(src = os.path.join(os.getcwd(), __file__), dst = dst)
+            shutil.copy(src = os.path.join(os.getcwd(), "config.py"), dst = dst)
+            if "resnet" in args.MODEL.lower():
+                shutil.copy(src = os.path.join(os.getcwd(), "ResNet.py"), dst = dst)
+            else:
+                shutil.copy(src = os.path.join(os.getcwd(), "{}.py".format(args.MODEL)), dst = dst)
+                shutil.copy(src = os.path.join(os.getcwd(), "ResNet.py"), dst = dst)
+                shutil.copy(src = os.path.join(os.getcwd(), "loss.py"), dst = dst)
+            shutil.copy(src = os.path.join(os.getcwd(), "load_model.py"), dst = dst)
+            # -------------------------------------------------------------------------
+            info_log('Index : {}'.format(args.INDEX), type = args.INFO_SHOW)
+            info_log("dataset : {}".format(args.DATASET_NAME), type = args.INFO_SHOW)
+
+            args.start = time.time()
 
     args.device_id = device_id
     runs(args)
-        
+    if args.global_rank in [-1, 0]:
+        info_log("Total training time : {:.2f} hours".format((time.time() - args.start) / 3600), type = args.INFO_SHOW)

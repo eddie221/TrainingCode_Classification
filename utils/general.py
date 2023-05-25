@@ -1,4 +1,3 @@
-import logging
 import torch
 from contextlib import contextmanager
 
@@ -16,6 +15,3 @@ def info_log(message, rank = -1, type = ["std"]):
             print(message)
         if "log" in type:
             logging.info(message)
-
-def set_logging(rank = -1):
-        logging.basicConfig(format = "%(message)s", level = logging.INFO if rank in [-1, 0] else logging.WARN)

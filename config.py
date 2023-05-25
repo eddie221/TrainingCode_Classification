@@ -9,6 +9,7 @@ cfg.INFO_SHOW = ["std", "log"]
 
 # hyper paramter
 cfg.EPOCH = 1
+cfg.RESUME = False
 
 ### if train and validation is mix together
 cfg.KFOLD = 1
@@ -36,7 +37,7 @@ cfg.LOSS = "CE"
 cfg.OPTIMIZER = "ADAM"
 
 # learning rate schedule
-#cfg.LR_SCHEUDLER = 50
+cfg.LR_SCHEUDLER = 50
 cfg.joint_lr_step_size = 5
 
 # dataset path and dataloader
